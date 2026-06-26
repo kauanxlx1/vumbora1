@@ -1,0 +1,6 @@
+{
+  "name": "Agenda e Organização Pessoal",
+  "description": "Sistema web moderno de Agenda e Organização Pessoal focado em produtividade diária.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
