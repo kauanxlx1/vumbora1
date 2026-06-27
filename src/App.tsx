@@ -11,7 +11,7 @@ import { useTaskMonitor } from './hooks/useTaskMonitor';
   ChevronLeft,
   ChevronRight,
 import
- { Sun,
+ ( Sun,
   Moon,
   User,
   Sparkles,
