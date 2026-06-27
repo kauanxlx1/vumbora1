@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
+import { useTaskMonitor } from './hooks/useTaskMonitor';
   Calendar,
   Clock,
   CheckCircle2,
@@ -111,6 +111,16 @@ export default function App() {
       }
     }
     return getInitialCompletions();
+  });// Função para exibir notificações
+  const showToast = (message: string) => {
+    setToasts((prev) => [...prev, { id: Date.now(), message }]);
+  };
+
+  // Monitoramento de tarefas
+  const { requestNotificationPermission } = useTaskMonitor({
+    tasks,
+    completions,
+    showToast
   });
 
   // --- CONTROLE DE FILTRO E DATA ---
@@ -165,7 +175,10 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
-
+// --- EFEITO PARA INICIAR MONITORAMENTO ---
+  useEffect(() => {
+    requestNotificationPermission();
+  }, [requestNotificationPermission]);
   // --- SINCRONIZAÇÃO EM TEMPO REAL COM O SUPABASE ---
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
