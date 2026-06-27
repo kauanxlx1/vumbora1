@@ -40,6 +40,36 @@ import ConfirmModal from './components/ConfirmModal';
 import ShortcutsModal from './components/ShortcutsModal';
 import ToastContainer, { ToastMessage } from './components/ToastContainer';
 
+import { supabase, isSupabaseConfigured } from './lib/supabaseClient';
+
+// Mapeadores para compatibilizar dados do banco com a nossa tipagem TypeScript
+function mapDBTaskToTask(dbTask: any): Task {
+  return {
+    id: dbTask.id,
+    name: dbTask.name,
+    hour: dbTask.hour,
+    endHour: dbTask.endHour || undefined,
+    type: dbTask.type,
+    date: dbTask.date || undefined,
+    daysOfWeek: Array.isArray(dbTask.daysOfWeek) ? dbTask.daysOfWeek : undefined,
+    description: dbTask.description || undefined,
+    color: dbTask.color || undefined,
+    createdAt: dbTask.createdAt || new Date().toISOString(),
+    startDate: dbTask.startDate || undefined,
+    endDate: dbTask.endDate || undefined,
+  };
+}
+
+function mapDBCompletionToCompletion(dbComp: any): TaskCompletion {
+  return {
+    taskId: dbComp.taskId,
+    date: dbComp.date,
+    completedAt: dbComp.completedAt,
+    completedTime: dbComp.completedTime || undefined,
+    delayReason: dbComp.delayReason || undefined,
+  };
+}
+
 export default function App() {
   // --- ESTADO DO USUÁRIO E TEMA ---
   const [userName, setUserName] = useState<string>(() => {
@@ -135,6 +165,103 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  // --- SINCRONIZAÇÃO EM TEMPO REAL COM O SUPABASE ---
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+
+    const syncInitialData = async () => {
+      try {
+        const { data: dbTasks, error: tError } = await supabase
+          .from('tasks')
+          .select('*')
+          .order('hour', { ascending: true });
+        
+        if (tError) throw tError;
+        if (dbTasks) {
+          setTasks(dbTasks.map(mapDBTaskToTask));
+        }
+
+        const { data: dbCompletions, error: cError } = await supabase
+          .from('completions')
+          .select('*');
+
+        if (cError) throw cError;
+        if (dbCompletions) {
+          setCompletions(dbCompletions.map(mapDBCompletionToCompletion));
+        }
+
+        showToast('Sincronizado com o Supabase!', 'success');
+      } catch (err: any) {
+        console.error('Erro de sincronização inicial com Supabase:', err);
+        showToast('Erro de sincronização com Supabase. Verifique seu console.', 'error');
+      }
+    };
+
+    syncInitialData();
+
+    // Inscreve para atualizações em tempo real das tarefas
+    const tasksChannel = supabase
+      .channel('public:tasks')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks' },
+        (payload) => {
+          const { eventType, new: newRecord, old: oldRecord } = payload;
+          if (eventType === 'INSERT' || eventType === 'UPDATE') {
+            const mappedTask = mapDBTaskToTask(newRecord);
+            setTasks((prev) => {
+              const otherTasks = prev.filter((t) => t.id !== mappedTask.id);
+              return [...otherTasks, mappedTask];
+            });
+          } else if (eventType === 'DELETE') {
+            setTasks((prev) => prev.filter((t) => t.id !== oldRecord.id));
+          }
+        }
+      )
+      .subscribe();
+
+    // Inscreve para atualizações em tempo real das conclusões
+    const completionsChannel = supabase
+      .channel('public:completions')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'completions' },
+        (payload) => {
+          const { eventType, new: newRecord, old: oldRecord } = payload;
+          if (eventType === 'INSERT' || eventType === 'UPDATE') {
+            const mappedCompletion = mapDBCompletionToCompletion(newRecord);
+            setCompletions((prev) => {
+              const otherCompletions = prev.filter(
+                (c) => !(c.taskId === mappedCompletion.taskId && c.date === mappedCompletion.date)
+              );
+              return [...otherCompletions, mappedCompletion];
+            });
+          } else if (eventType === 'DELETE') {
+            const taskId = oldRecord.taskId || oldRecord.task_id;
+            const date = oldRecord.date;
+            if (taskId && date) {
+              setCompletions((prev) =>
+                prev.filter((c) => !(c.taskId === taskId && c.date === date))
+              );
+            } else {
+              // Recarrega caso o payload de delete seja parcial
+              supabase.from('completions').select('*').then(({ data }) => {
+                if (data) {
+                  setCompletions(data.map(mapDBCompletionToCompletion));
+                }
+              });
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(tasksChannel);
+      supabase.removeChannel(completionsChannel);
+    };
+  }, []);
 
   // Atualiza relógio ao vivo a cada segundo para manter precisão e exibir horário atualizado
   useEffect(() => {
@@ -313,7 +440,7 @@ export default function App() {
     setIsDeleteModalOpen(true);
   };
 
-  const handleSaveTask = (taskData: {
+  const handleSaveTask = async (taskData: {
     id?: string;
     name: string;
     hour: string;
@@ -330,8 +457,10 @@ export default function App() {
     delayReason?: string;
   }) => {
     let savedTaskId = taskData.id;
+    let newTaskObj: Task;
+
     if (taskData.id) {
-      // Atualização
+      // Atualização local imediata (Optimistic Update)
       setTasks((prev) =>
         prev.map((t) =>
           t.id === taskData.id
@@ -351,12 +480,27 @@ export default function App() {
             : t
         )
       );
+      // Cria o objeto atualizado
+      newTaskObj = {
+        id: taskData.id,
+        name: taskData.name,
+        hour: taskData.hour,
+        endHour: taskData.endHour,
+        type: taskData.type,
+        date: taskData.date,
+        daysOfWeek: taskData.daysOfWeek,
+        description: taskData.description,
+        color: taskData.color,
+        createdAt: tasks.find((t) => t.id === taskData.id)?.createdAt || new Date().toISOString(),
+        startDate: taskData.startDate,
+        endDate: taskData.endDate,
+      };
       showToast('Tarefa atualizada com sucesso', 'success');
     } else {
-      // Criação
+      // Criação local imediata (Optimistic Update)
       const generatedId = 'task-' + Math.random().toString(36).substring(2, 9);
       savedTaskId = generatedId;
-      const newTask: Task = {
+      newTaskObj = {
         id: generatedId,
         name: taskData.name,
         hour: taskData.hour,
@@ -370,56 +514,135 @@ export default function App() {
         startDate: taskData.startDate,
         endDate: taskData.endDate,
       };
-      setTasks((prev) => [...prev, newTask]);
+      setTasks((prev) => [...prev, newTaskObj]);
       showToast('Tarefa criada com sucesso', 'success');
+    }
+
+    // Se o Supabase estiver configurado, salvar no banco
+    if (isSupabaseConfigured()) {
+      try {
+        const { error } = await supabase.from('tasks').upsert({
+          id: newTaskObj.id,
+          name: newTaskObj.name,
+          hour: newTaskObj.hour,
+          endHour: newTaskObj.endHour || null,
+          type: newTaskObj.type,
+          date: newTaskObj.date || null,
+          daysOfWeek: newTaskObj.daysOfWeek || null,
+          description: newTaskObj.description || null,
+          color: newTaskObj.color || null,
+          createdAt: newTaskObj.createdAt,
+          startDate: newTaskObj.startDate || null,
+          endDate: newTaskObj.endDate || null,
+        });
+        if (error) throw error;
+      } catch (err) {
+        console.error('Erro ao salvar tarefa no Supabase:', err);
+        showToast('Erro de sincronização ao salvar no Supabase', 'error');
+      }
     }
 
     // Processamento de status de conclusão específico se editado a partir do histórico
     if (historyEditDate && savedTaskId) {
       if (taskData.historyCompleted) {
-        // Registra ou atualiza conclusão
+        const updatedCompletion: TaskCompletion = {
+          taskId: savedTaskId!,
+          date: historyEditDate,
+          completedAt: new Date().toISOString(),
+          completedTime: taskData.completedTime,
+          delayReason: taskData.delayReason,
+        };
+        // Atualização local imediata
         setCompletions((prev) => {
           const filtered = prev.filter((c) => !(c.taskId === savedTaskId && c.date === historyEditDate));
-          const updatedCompletion: TaskCompletion = {
-            taskId: savedTaskId!,
-            date: historyEditDate,
-            completedAt: new Date().toISOString(),
-            completedTime: taskData.completedTime,
-            delayReason: taskData.delayReason,
-          };
           return [...filtered, updatedCompletion];
         });
-        showToast('Tarefa salva e marcada como concluída no histórico', 'success');
+
+        if (isSupabaseConfigured()) {
+          try {
+            const { error } = await supabase.from('completions').upsert({
+              taskId: updatedCompletion.taskId,
+              date: updatedCompletion.date,
+              completedAt: updatedCompletion.completedAt,
+              completedTime: updatedCompletion.completedTime || null,
+              delayReason: updatedCompletion.delayReason || null,
+            });
+            if (error) throw error;
+          } catch (err) {
+            console.error('Erro ao salvar conclusão no Supabase:', err);
+          }
+        }
+        showToast('Tarefa marcada como concluída no histórico', 'success');
       } else {
-        // Reverte conclusão
+        // Reverte conclusão localmente
         setCompletions((prev) =>
           prev.filter((c) => !(c.taskId === savedTaskId && c.date === historyEditDate))
         );
-        showToast('Tarefa salva e marcada como pendente no histórico', 'info');
+
+        if (isSupabaseConfigured()) {
+          try {
+            const { error } = await supabase
+              .from('completions')
+              .delete()
+              .eq('taskId', savedTaskId)
+              .eq('date', historyEditDate);
+            if (error) throw error;
+          } catch (err) {
+            console.error('Erro ao excluir conclusão no Supabase:', err);
+          }
+        }
+        showToast('Tarefa marcada como pendente no histórico', 'info');
       }
     }
   };
 
-  const handleDeleteTask = () => {
+  const handleDeleteTask = async () => {
     if (!taskToDelete) return;
-    setTasks((prev) => prev.filter((t) => t.id !== taskToDelete.id));
-    // Remove conclusões associadas para limpar histórico
-    setCompletions((prev) => prev.filter((c) => c.taskId !== taskToDelete.id));
+    const deletedId = taskToDelete.id;
+
+    // Atualização local imediata (Optimistic Update)
+    setTasks((prev) => prev.filter((t) => t.id !== deletedId));
+    setCompletions((prev) => prev.filter((c) => c.taskId !== deletedId));
     showToast('Tarefa excluída', 'info');
     setTaskToDelete(null);
+
+    // Se o Supabase estiver ativo, deleta no banco
+    if (isSupabaseConfigured()) {
+      try {
+        const { error } = await supabase.from('tasks').delete().eq('id', deletedId);
+        if (error) throw error;
+      } catch (err) {
+        console.error('Erro ao deletar tarefa no Supabase:', err);
+        showToast('Erro ao remover do Supabase', 'error');
+      }
+    }
   };
 
-  const handleToggleComplete = (taskId: string, targetDateStr = formatDateString(currentDate), preventUndoToast = false) => {
+  const handleToggleComplete = async (taskId: string, targetDateStr = formatDateString(currentDate), preventUndoToast = false) => {
     const isAlreadyCompleted = completions.some(
       (c) => c.taskId === taskId && c.date === targetDateStr
     );
 
     if (isAlreadyCompleted) {
-      // Reverte conclusão
+      // Reverte conclusão localmente
       setCompletions((prev) =>
         prev.filter((c) => !(c.taskId === taskId && c.date === targetDateStr))
       );
       
+      // Atualiza Supabase
+      if (isSupabaseConfigured()) {
+        try {
+          const { error } = await supabase
+            .from('completions')
+            .delete()
+            .eq('taskId', taskId)
+            .eq('date', targetDateStr);
+          if (error) throw error;
+        } catch (err) {
+          console.error('Erro ao remover conclusão no Supabase:', err);
+        }
+      }
+
       if (!preventUndoToast) {
         showToast('Tarefa marcada como pendente', 'info', {
           label: 'Desfazer ação',
@@ -429,7 +652,7 @@ export default function App() {
         showToast('Ação desfeita com sucesso', 'success');
       }
     } else {
-      // Registra conclusão
+      // Registra conclusão localmente
       const newCompletion: TaskCompletion = {
         taskId,
         date: targetDateStr,
@@ -437,6 +660,20 @@ export default function App() {
       };
       setCompletions((prev) => [...prev, newCompletion]);
       
+      // Atualiza Supabase
+      if (isSupabaseConfigured()) {
+        try {
+          const { error } = await supabase.from('completions').upsert({
+            taskId: newCompletion.taskId,
+            date: newCompletion.date,
+            completedAt: newCompletion.completedAt,
+          });
+          if (error) throw error;
+        } catch (err) {
+          console.error('Erro ao salvar conclusão no Supabase:', err);
+        }
+      }
+
       if (!preventUndoToast) {
         showToast('Tarefa concluída', 'success', {
           label: 'Desfazer ação',
@@ -601,14 +838,32 @@ export default function App() {
       {/* Barra de Horário de Brasília no Topo */}
       <div id="brasilia-time-topbar" className="bg-white border-b border-slate-200/80 dark:bg-slate-900 dark:border-slate-800/80 w-full py-2.5 px-4 sm:px-6 lg:px-8 shadow-2xs">
         <div id="brasilia-time-content" className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5">
-          <div id="brasilia-status-indicator" className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              Horário Oficial de Brasília (UTC-3)
-            </span>
+          <div id="brasilia-status-indicator" className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                Horário Oficial de Brasília (UTC-3)
+              </span>
+            </div>
+            
+            {/* Indicador de Sincronização do Supabase */}
+            <div 
+              id="supabase-status-badge"
+              className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition-all ${
+                isSupabaseConfigured()
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-950/20 dark:text-emerald-400'
+                  : 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/30 dark:bg-amber-950/20 dark:text-amber-400'
+              }`}
+              title={isSupabaseConfigured() ? "Conectado ao Supabase: Sincronização em tempo real entre celular e PC ativa!" : "Rodando localmente: insira a URL e Anon Key em src/lib/supabaseClient.ts para ativar a sincronização em tempo real!"}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${isSupabaseConfigured() ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+              <span className="uppercase tracking-wider">
+                {isSupabaseConfigured() ? 'Supabase Sincronizado' : 'Modo Local'}
+              </span>
+            </div>
           </div>
           <div id="brasilia-clock-display" className="flex items-center gap-2.5">
             <Clock className="h-4 w-4 text-blue-500 animate-pulse" />
