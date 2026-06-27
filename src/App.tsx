@@ -10,7 +10,7 @@ import { useTaskMonitor } from './hooks/useTaskMonitor';
   Search,
   ChevronLeft,
   ChevronRight,
-import {
+import
   Sun,
   Moon,
   User,
@@ -20,7 +20,7 @@ import {
   Keyboard,
   Bell,
   BellOff
-} from 'lucide-react';
+ from 'lucide-react';
 import { Task, TaskCompletion, TaskFilter } from './types';
 import { getInitialTasks, getInitialCompletions } from './data/mockTasks';
 import {
