@@ -20,7 +20,6 @@ import { useTaskMonitor } from './hooks/useTaskMonitor';
   Bell,
   BellOff
   } from 'lucide-react';
-
 import { Task, TaskCompletion, TaskFilter } from './types';
 import { getInitialTasks, getInitialCompletions } from './data/mockTasks';
 import {
