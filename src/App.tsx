@@ -859,7 +859,7 @@ useEffect(() => {
   const freeHours = Math.max(0, 24 - hoursOccupied);
 
   return (
-    <div id="app-root-container" className="min-h-screen bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-300 pb-24 lg:pb-12">
+<div id="app-root-container" className="min-h-screen bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-300 pb-24 lg:pb-12">
       {/* Barra de Horário de Brasília no Topo */}
       <div id="brasilia-time-topbar" className="bg-white border-b border-slate-200/80 dark:bg-slate-900 dark:border-slate-800/80 w-full py-2.5 px-4 sm:px-6 lg:px-8 shadow-2xs">
         <div id="brasilia-time-content" className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2.5">
