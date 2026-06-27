@@ -857,7 +857,7 @@ useEffect(() => {
   const uniqueHours = [...new Set(activeTasksToday.map((t) => t.hour.split(':')[0]))];
   const hoursOccupied = uniqueHours.length;
   const freeHours = Math.max(0, 24 - hoursOccupied);
-
+ 
   return (
 <div id="app-root-container" className="min-h-screen bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 transition-colors duration-300 pb-24 lg:pb-12">
       {/* Barra de Horário de Brasília no Topo */}
