@@ -13,7 +13,7 @@ import { useTaskMonitor } from './hooks/useTaskMonitor';
 import
  ( Sun,
   Moon,
- ( User,
+ ) User,
   Sparkles,
   Check,
   Edit2,
