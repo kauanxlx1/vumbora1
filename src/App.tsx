@@ -86,7 +86,19 @@ export default function App() {
       return 'dark';
     }
     return 'light';
-  });
+  });// --- EFEITO DE SINCRONIZAÇÃO DO TEMA ---
+useEffect(() => {
+  const root = window.document.documentElement;
+  
+  // Limpa as classes anteriores
+  root.classList.remove('light', 'dark');
+  
+  // Adiciona a classe atual
+  root.classList.add(theme);
+  
+  // Salva no localStorage para persistir
+  localStorage.setItem('agenda_theme', theme);
+}, [theme]);
 
   // --- ESTADO PRINCIPAL DE DADOS ---
   const [tasks, setTasks] = useState<Task[]>(() => {
